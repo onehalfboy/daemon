@@ -269,11 +269,16 @@ start() {
 
 stop() {
     echo -n $"Stopping $servname: "
-    killproc -p $pidfile $proc
+    kill -9 $(cat $pidfile) && rm -f $pidfile
     retval=$?
     echo
     [ $retval -eq 0 ] && rm -f $lockfile
     return $retval
+}
+
+clear() {
+    rm -f $pidfile
+    rm -f $lockfile
 }
 
 restart() {
@@ -282,7 +287,28 @@ restart() {
 }
 
 rh_status() {
-    status -p $pidfile $proc
+        pidCmd=$(ps -eo pid,user,args | grep "$exec" | grep -v "grep" | awk '{print $1; exit 0;}')
+        if [ ! -f "$pidfile" ] && [ -z "$pidCmd" ]; then
+            echo "$servname is stopped";
+            return 1;
+        fi
+        pid=$(cat $pidfile);
+        if [ "$pidCmd" != "$pid" ]; then
+            if [ ! -z "$pid" ]; then
+                kill -9 $pid
+            fi
+            if [ ! -z "$pidCmd" ]; then
+                echo "$pidCmd" > "$pidfile";
+                touch $lockfile
+                echo "$proc is running [pid  $(cat $pidfile)]";
+                return 0;
+            fi
+            clear
+            echo "$servname is stopped";
+            return 1;
+        fi
+        echo "$proc is running [pid  $pid]";
+        return 0;
 }
 
 rh_status_q() {
