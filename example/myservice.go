@@ -9,13 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/takama/daemon"
+	"github.com/onehalfboy/daemon"
 )
 
 const (
 
 	// name of the service
 	name        = "myservice"
+	version     = "4.0.0"
 	description = "My Echo Service"
 
 	// port which daemon should be listen
@@ -51,6 +52,14 @@ func (service *Service) Manage() (string, error) {
 			return service.Stop()
 		case "status":
 			return service.Status()
+		case "restart":
+			return service.Restart()
+		case "version":
+			return version, nil
+		case "description":
+			return description, nil
+		case "execpath":
+			return service.ExecPath("")
 		default:
 			return usage, nil
 		}
@@ -90,9 +99,6 @@ func (service *Service) Manage() (string, error) {
 			return "Daemon was killed", nil
 		}
 	}
-
-	// never happen, but need to complete code
-	return usage, nil
 }
 
 // Accept a client connection and collect it in a channel
@@ -123,7 +129,7 @@ func init() {
 }
 
 func main() {
-	srv, err := daemon.New(name, description, dependencies...)
+	srv, err := daemon.New(name, port, version, description, dependencies...)
 	if err != nil {
 		errlog.Println("Error: ", err)
 		os.Exit(1)
@@ -135,5 +141,4 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(status)
-
 }
