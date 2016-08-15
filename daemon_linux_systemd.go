@@ -15,6 +15,8 @@ import (
 // systemDRecord - standard record (struct) for linux systemD version of daemon package
 type systemDRecord struct {
 	name         string
+	port         string
+	version      string
 	description  string
 	dependencies []string
 }
@@ -42,13 +44,13 @@ func (linux *systemDRecord) checkRunning() (string, bool) {
 			reg := regexp.MustCompile("Main PID: ([0-9]+)")
 			data := reg.FindStringSubmatch(string(output))
 			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
+				return "Service " + linux.name + " (pid  " + data[1] + ") is running...", true
 			}
-			return "Service is running...", true
+			return "Service " + linux.name + " is running...", true
 		}
 	}
 
-	return "Service is stopped", false
+	return "Service " + linux.name + " is stopped", false
 }
 
 // Install the service
@@ -85,9 +87,11 @@ func (linux *systemDRecord) Install(args ...string) (string, error) {
 	if err := templ.Execute(
 		file,
 		&struct {
-			Name, Description, Dependencies, Path string
+			Name, Port, Version, Description, Dependencies, Path string
 		}{
 			linux.name,
+			linux.port,
+			linux.version,
 			linux.description,
 			strings.Join(linux.dependencies, " "),
 			strings.Join(path, " "),
@@ -192,6 +196,45 @@ func (linux *systemDRecord) Status() (string, error) {
 	return statusAction, nil
 }
 
+// Path - Get service path
+func (linux *systemDRecord) ExecPath(serviceName string) (string, error) {
+
+	if ok, err := checkPrivileges(); !ok {
+		return "", err
+	}
+
+	if !linux.isInstalled() {
+		return "", ErrNotInstalled
+	}
+
+	if serviceName == "" {
+		serviceName = linux.name
+	}
+	// This maybe is falt
+	output, err := exec.Command("systemctl", "execpath", serviceName+".service").Output()
+
+	return string(output), err
+}
+
+// Restart the service
+func (linux *systemDRecord) Restart() (string, error) {
+	startAction := "Restarting " + linux.description + ":"
+
+	if ok, err := checkPrivileges(); !ok {
+		return startAction + failed, err
+	}
+
+	if !linux.isInstalled() {
+		return startAction + failed, ErrNotInstalled
+	}
+
+	if err := exec.Command("systemctl", "restart", linux.name+".service").Run(); err != nil {
+		return startAction + failed, err
+	}
+
+	return startAction + success, nil
+}
+
 var systemDConfig = `[Unit]
 Description={{.Description}}
 Requires={{.Dependencies}}
@@ -202,6 +245,8 @@ PIDFile=/var/run/{{.Name}}.pid
 ExecStartPre=/bin/rm -f /var/run/{{.Name}}.pid
 ExecStart={{.Path}}
 Restart=on-abort
+Port={{.Port}}
+Version={{.Version}}
 
 [Install]
 WantedBy=multi-user.target

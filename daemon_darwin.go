@@ -16,13 +16,15 @@ import (
 // darwinRecord - standard record (struct) for darwin version of daemon package
 type darwinRecord struct {
 	name         string
+	port         string
+	version      string
 	description  string
 	dependencies []string
 }
 
-func newDaemon(name, description string, dependencies []string) (Daemon, error) {
+func newDaemon(name, port string, version string, description string, dependencies []string) (Daemon, error) {
 
-	return &darwinRecord{name, description, dependencies}, nil
+	return &darwinRecord{name, port, version, description, dependencies}, nil
 }
 
 // Standard service path for system daemons
@@ -53,13 +55,13 @@ func (darwin *darwinRecord) checkRunning() (string, bool) {
 			reg := regexp.MustCompile("PID\" = ([0-9]+);")
 			data := reg.FindStringSubmatch(string(output))
 			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
+				return "Service " + darwin.name + " (pid  " + data[1] + ") is running...", true
 			}
-			return "Service is running...", true
+			return "Service " + darwin.name + " is running...", true
 		}
 	}
 
-	return "Service is stopped", false
+	return "Service " + darwin.name + " is stopped", false
 }
 
 // Install the service
@@ -184,6 +186,49 @@ func (darwin *darwinRecord) Status() (string, error) {
 	statusAction, _ := darwin.checkRunning()
 
 	return statusAction, nil
+}
+
+// Path - Get service path
+func (darwin *darwinRecord) ExecPath(serviceName string) (string, error) {
+
+	if ok, err := checkPrivileges(); !ok {
+		return "", err
+	}
+
+	if !linux.isInstalled() {
+		return "", ErrNotInstalled
+	}
+
+	if serviceName == "" {
+		serviceName = linux.name
+	}
+	// This is falt
+	output, err := exec.Command("launchctl", "execpath", serviceName).Output()
+
+	return string(output), err
+}
+
+// Restart the service
+func (darwin *darwinRecord) Restart() (string, error) {
+	startAction := "Restarting " + darwin.description + ":"
+
+	if ok, err := checkPrivileges(); !ok {
+		return startAction + failed, err
+	}
+
+	if !darwin.isInstalled() {
+		return startAction + failed, ErrNotInstalled
+	}
+
+	if err := exec.Command("launchctl", "unload", darwin.servicePath()).Run(); err != nil {
+		// return startAction + failed, err
+	}
+
+	if err := exec.Command("launchctl", "load", darwin.servicePath()).Run(); err != nil {
+		return startAction + failed, err
+	}
+
+	return startAction + success, nil
 }
 
 var propertyList = `<?xml version="1.0" encoding="UTF-8"?>

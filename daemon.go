@@ -174,6 +174,12 @@ type Daemon interface {
 
 	// Status - check the service status
 	Status() (string, error)
+
+	// The service's exec path
+	ExecPath(string) (string, error)
+
+	// Restart the service
+	Restart() (string, error)
 }
 
 // New - Create a new daemon
@@ -181,6 +187,6 @@ type Daemon interface {
 // name: name of the service
 //
 // description: any explanation, what is the service, its purpose
-func New(name, description string, dependencies ...string) (Daemon, error) {
-	return newDaemon(strings.Join(strings.Fields(name), "_"), description, dependencies)
+func New(name, port string, version string, description string, dependencies ...string) (Daemon, error) {
+	return newDaemon(strings.Join(strings.Fields(name), "_"), port, version, description, dependencies)
 }

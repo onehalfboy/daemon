@@ -15,6 +15,8 @@ import (
 // systemVRecord - standard record (struct) for linux systemV version of daemon package
 type systemVRecord struct {
 	name         string
+	port         string
+	version      string
 	description  string
 	dependencies []string
 }
@@ -38,17 +40,19 @@ func (linux *systemVRecord) isInstalled() bool {
 func (linux *systemVRecord) checkRunning() (string, bool) {
 	output, err := exec.Command("service", linux.name, "status").Output()
 	if err == nil {
-		if matched, err := regexp.MatchString(linux.name, string(output)); err == nil && matched {
-			reg := regexp.MustCompile("pid  ([0-9]+)")
-			data := reg.FindStringSubmatch(string(output))
-			if len(data) > 1 {
-				return "Service (pid  " + data[1] + ") is running...", true
+		if matched, err := regexp.MatchString("running", string(output)); err == nil && matched {
+			if matched, err := regexp.MatchString(linux.name, string(output)); err == nil && matched {
+				reg := regexp.MustCompile("pid  ([0-9]+)")
+				data := reg.FindStringSubmatch(string(output))
+				if len(data) > 1 {
+					return "Service " + linux.name + " (pid  " + data[1] + ") is running...", true
+				}
+				return "Service " + linux.name + " is running...", true
 			}
-			return "Service is running...", true
 		}
 	}
 
-	return "Service is stopped", false
+	return "Service " + linux.name + " is stopped", false
 }
 
 // Install the service
@@ -84,8 +88,8 @@ func (linux *systemVRecord) Install(args ...string) (string, error) {
 	if err := templ.Execute(
 		file,
 		&struct {
-			Name, Description, Path, Args string
-		}{linux.name, linux.description, execPatch, strings.Join(args, " ")},
+			Name, Port, Version, Description, Path, Args string
+		}{linux.name, linux.port, linux.version, linux.description, execPatch, strings.Join(args, " ")},
 	); err != nil {
 		return installAction + failed, err
 	}
@@ -200,6 +204,44 @@ func (linux *systemVRecord) Status() (string, error) {
 	return statusAction, nil
 }
 
+// Path - Get service path
+func (linux *systemVRecord) ExecPath(serviceName string) (string, error) {
+
+	if ok, err := checkPrivileges(); !ok {
+		return "", err
+	}
+
+	if !linux.isInstalled() {
+		return "", ErrNotInstalled
+	}
+
+	if serviceName == "" {
+		serviceName = linux.name
+	}
+	output, err := exec.Command("service", serviceName, "execpath").Output()
+
+	return string(output), err
+}
+
+// Restart the service
+func (linux *systemVRecord) Restart() (string, error) {
+	startAction := "Restarting " + linux.description + ":"
+
+	if ok, err := checkPrivileges(); !ok {
+		return startAction + failed, err
+	}
+
+	if !linux.isInstalled() {
+		return startAction + failed, ErrNotInstalled
+	}
+
+	if err := exec.Command("service", linux.name, "restart").Run(); err != nil {
+		return startAction + failed, err
+	}
+
+	return startAction + success, nil
+}
+
 var systemVConfig = `#! /bin/sh
 #
 #       /etc/rc.d/init.d/{{.Name}}
@@ -228,12 +270,33 @@ fi
 
 exec="{{.Path}}"
 servname="{{.Description}}"
+port="{{.Port}}"
+version="{{.Version}}"
 
 proc="{{.Name}}"
 pidfile="/var/run/$proc.pid"
 lockfile="/var/lock/subsys/$proc"
 stdoutlog="/var/log/$proc.log"
 stderrlog="/var/log/$proc.err"
+
+privilegeCheck() {
+    testFile="/var/tmp/${proc}_testPriv.t"
+    touch $testFile
+    chown root:root $testFile 2>/dev/null
+    if [ $? != 0 ]; then
+        rm -f $testFile
+        echo "Error:  You must have root user privileges. Possibly using 'sudo' command should help"
+        exit 1
+    fi
+    rm -f $testFile
+    if [ $? != 0 ]; then
+        echo "Error:  You must have root user privileges. Possibly using 'sudo' command should help"
+        exit 1
+    fi
+}
+
+# root or sudo command
+privilegeCheck
 
 [ -d $(dirname $lockfile) ] || mkdir -p $(dirname $lockfile)
 
@@ -253,26 +316,53 @@ start() {
 
     if ! [ -f $pidfile ]; then
         printf "Starting $servname:\t"
+        if [ $? != 0 ]; then
+            echo -n "Starting $servname:     "
+        fi
         echo "$(date)" >> $stdoutlog
         $exec {{.Args}} >> $stdoutlog 2>> $stderrlog &
         echo $! > $pidfile
         touch $lockfile
-        success
-        echo
+        success 2>/dev/null
+        if [ $? != 0 ]; then
+            echo "[ OK ]"
+        else
+            echo
+        fi
     else
         # failure
         echo
         printf "$pidfile still exists...\n"
+        if [ $? != 0 ]; then
+            echo "$pidfile still exists..."
+        fi
         exit 7
     fi
 }
 
 stop() {
-    echo -n $"Stopping $servname: "
+    printf "Stopping $servname:\t"
+    if [ $? != 0 ]; then
+        echo -n "Stopping $servname:     "
+    fi
     kill -9 $(cat $pidfile) && rm -f $pidfile
     retval=$?
-    echo
     [ $retval -eq 0 ] && rm -f $lockfile
+    if [ $? != 0 ]; then
+        failure 2>/dev/null
+        if [ $? != 0 ]; then
+            echo "[ FAILED ]"
+        else
+            echo
+        fi
+    else
+        success 2>/dev/null
+        if [ $? != 0 ]; then
+            echo "[ OK ]"
+        else
+            echo
+        fi
+    fi
     return $retval
 }
 
@@ -282,12 +372,12 @@ clear() {
 }
 
 restart() {
-    stop
+    stop >/dev/null 2>/dev/null
     start
 }
 
 rh_status() {
-        pidCmd=$(ps -eo pid,user,args | grep "$exec" | grep -v "grep" | awk '{print $1; exit 0;}')
+        pidCmd=$(lsof -i${port} | awk '{print $2;}' | sed -n 2p)
         if [ ! -f "$pidfile" ] && [ -z "$pidCmd" ]; then
             echo "$servname is stopped";
             return 1;
@@ -300,14 +390,14 @@ rh_status() {
             if [ ! -z "$pidCmd" ]; then
                 echo "$pidCmd" > "$pidfile";
                 touch $lockfile
-                echo "$proc is running [pid  $(cat $pidfile)]";
+                echo "$servname is running [pid  $(cat $pidfile)]";
                 return 0;
             fi
             clear
             echo "$servname is stopped";
             return 1;
         fi
-        echo "$proc is running [pid  $pid]";
+        echo "$servname is running [pid  $pid]";
         return 0;
 }
 
@@ -330,8 +420,17 @@ case "$1" in
     status)
         rh_status
         ;;
+    version)
+        echo $version
+        ;;
+    description)
+        echo $servname
+        ;;
+    execpath)
+        echo $exec
+        ;;
     *)
-        echo $"Usage: $0 {start|stop|status|restart}"
+        echo "Usage: $0 {start|stop|status|restart|version|description|execpath}"
         exit 2
 esac
 

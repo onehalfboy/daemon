@@ -19,13 +19,15 @@ var ErrWindowsUnsupported = errors.New("Adding as a service failed. Download and
 // windowsRecord - standard record (struct) for windows version of daemon package
 type windowsRecord struct {
 	name         string
+	port         string
+	version      string
 	description  string
 	dependencies []string
 }
 
-func newDaemon(name, description string, dependencies []string) (Daemon, error) {
+func newDaemon(name, port string, version string, description string, dependencies []string) (Daemon, error) {
 
-	return &windowsRecord{name, description, dependencies}, nil
+	return &windowsRecord{name, port, version, description, dependencies}, nil
 }
 
 // Install the service
@@ -96,6 +98,28 @@ func (windows *windowsRecord) Status() (string, error) {
 		return "Getting status:" + failed, err
 	}
 	return "Status: " + string(out), nil
+}
+
+// Path - Get service path
+func (windows *windowsRecord) ExecPath(serviceName string) (string, error) {
+	if serviceName == "" {
+		serviceName = windows.name
+	}
+	// This is falt
+	output, err := exec.Command("nssm.exe", "execpath", serviceName).Output()
+
+	return string(output), err
+}
+
+// Restart the service
+func (windows *windowsRecord) Restart() (string, error) {
+	startAction := "Restarting " + windows.description + ":"
+	cmd := exec.Command("nssm.exe", "restart", windows.name)
+	err := cmd.Run()
+	if err != nil {
+		return startAction + failed, err
+	}
+	return startAction + " completed.", nil
 }
 
 // Get executable path
